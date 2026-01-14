@@ -1,0 +1,235 @@
+# InsightLayer example configuration.
+#
+# This file demonstrates every feature in a single config. It is deliberately
+# verbose so you can see all the options in one place. A real deployment would
+# typically use only a subset of what is shown here.
+#
+# The setup below exposes a single proxy that:
+#
+#   1. Bridges OpenAI clients to an Anthropic backend (the default /v1 path).
+#   2. Offers a direct OpenAI path under the /openai namespace.
+#   3. Passes embedding and model listing requests through to OpenAI.
+#   4. Bridges Anthropic clients to an OpenAI backend.
+#   5. Offers a direct Anthropic path under the /anthropic namespace.
+#   6. Logs requests, redacts a project codename, and sets custom headers.
+#
+# Environment variables referenced with ${VAR} are expanded at startup.
+# If a variable is not set, the literal ${VAR} string remains, which usually
+# causes a clear auth failure rather than a silent misconfiguration.
+
+server:
+  listen: ":8080"
+  read_timeout: 60s
+  idle_timeout: 120s
+
+  # Write timeout is zero on purpose. Streaming responses are long-lived SSE
+  # connections, and a nonzero timeout would kill them mid-stream.
+  write_timeout: 0s
+
+# --- Routing -----------------------------------------------------------------
+#
+# Routes are checked in priority order (highest first). If two routes share the
+# same priority, the longer path prefix wins. The first match handles the
+# request.
+
+routing:
+  routes:
+    # Default chat path: OpenAI clients hit /v1/chat/completions, requests are
+    # translated to Anthropic format and forwarded to Claude.
+    # Credentials are translated automatically: a Bearer token from the client
+    # becomes an X-Api-Key header on the Anthropic side.
+    - name: openai-chat-to-anthropic
+      priority: 200
+      inbound_protocol: openai
+      path_prefix: /v1/chat/completions
+      endpoint_kinds: [chat]
+      backend: anthropic-prefer-client
+
+    # Namespaced OpenAI path: clients that explicitly want to hit an OpenAI
+    # backend can use /openai/v1/chat/completions instead.
+    - name: openai-chat-to-openai
+      priority: 150
+      inbound_protocol: openai
+      path_prefix: /openai/v1/chat/completions
+      endpoint_kinds: [chat]
+      backend: openai-inject
+
+    # Embedding and model listing are passthrough endpoints. They skip protocol
+    # translation and forward the request body as-is, so the client and backend
+    # must share the same protocol.
+    - name: openai-embeddings
+      priority: 150
+      inbound_protocol: openai
+      path_prefix: /v1/embeddings
+      endpoint_kinds: [embedding]
+      backend: openai-passthrough
+
+    - name: openai-models
+      priority: 150
+      inbound_protocol: openai
+      path_prefix: /v1/models
+      endpoint_kinds: [model_list]
+      backend: openai-passthrough
+
+    # Catch-all for the rest of the OpenAI /v1 surface. In practice this
+    # handles legacy /v1/completions requests. It would also catch chat if the
+    # higher-priority route above were removed.
+    - name: openai-default
+      priority: 50
+      inbound_protocol: openai
+      path_prefix: /v1
+      endpoint_kinds: [chat, completion, embedding, model_list]
+      backend: openai-inject
+
+    # Reverse bridge: Anthropic clients hit /v1/messages, requests are
+    # translated to OpenAI format and forwarded to an OpenAI-compatible backend.
+    - name: anthropic-messages-to-openai
+      priority: 200
+      inbound_protocol: anthropic
+      path_prefix: /v1/messages
+      endpoint_kinds: [chat]
+      backend: openai-prefer-client
+
+    # Namespaced Anthropic path for clients that explicitly want the Anthropic
+    # backend without cross-protocol translation.
+    - name: anthropic-messages-to-anthropic
+      priority: 150
+      inbound_protocol: anthropic
+      path_prefix: /anthropic/v1/messages
+      endpoint_kinds: [chat]
+      backend: anthropic-inject
+
+# --- Backends ----------------------------------------------------------------
+#
+# Each backend has an auth mode:
+#
+#   inject         Always use the configured credential, ignore the client's.
+#   passthrough    Forward the client's credential as-is, no fallback.
+#   prefer_client  Use the client's credential if present, otherwise fall back
+#                  to the configured one.
+
+backends:
+  - name: openai-inject
+    protocol: openai
+    base_url: https://api.openai.com
+    auth:
+      mode: inject
+      header: Authorization
+      value: Bearer ${OPENAI_API_KEY}
+    default_headers:
+      OpenAI-Project: ${OPENAI_PROJECT_ID}
+
+  - name: openai-prefer-client
+    protocol: openai
+    base_url: https://api.openai.com
+    auth:
+      mode: prefer_client
+      header: Authorization
+      value: Bearer ${OPENAI_FALLBACK_API_KEY}
+
+  - name: openai-passthrough
+    protocol: openai
+    base_url: https://api.openai.com
+    auth:
+      mode: passthrough
+
+  - name: anthropic-inject
+    protocol: anthropic
+    base_url: https://api.anthropic.com
+    auth:
+      mode: inject
+      header: X-Api-Key
+      value: ${ANTHROPIC_API_KEY}
+    default_headers:
+      anthropic-version: "2023-06-01"
+
+  # Used by the default /v1/chat/completions route. Clients that send their own
+  # API key (as a Bearer token) get it translated to X-Api-Key automatically.
+  # Clients that do not send a key get the fallback.
+  - name: anthropic-prefer-client
+    protocol: anthropic
+    base_url: https://api.anthropic.com
+    auth:
+      mode: prefer_client
+      header: X-Api-Key
+      value: ${ANTHROPIC_FALLBACK_API_KEY}
+    default_headers:
+      anthropic-version: "2023-06-01"
+
+# --- Hooks -------------------------------------------------------------------
+#
+# Hooks run in the order listed. They operate on the protocol-neutral
+# representation, so the same hook works regardless of which protocols the
+# client and backend use. Set enabled: false to disable a hook without
+# removing it from the config.
+
+hooks:
+  # Log each request's model, endpoint type, and message count.
+  - name: request-logger
+    type: logging
+    stage: pre_request
+    enabled: true
+    config:
+      verbose: false
+
+  # Same hook with verbose output, disabled by default. Flip enabled to true
+  # when you need to see system prompts in the logs for debugging.
+  - name: verbose-request-logger
+    type: logging
+    stage: pre_request
+    enabled: false
+    config:
+      verbose: true
+
+  # Redact a project codename from request content before it leaves the proxy.
+  # The target field can be "all", "system", "user", or "assistant".
+  - name: request-redaction
+    type: request_text_modifier
+    stage: pre_request
+    enabled: true
+    config:
+      target: all
+      replacements:
+        SECRET_PROJECT: "[redacted]"
+
+  # Add a tenant header to upstream requests.
+  - name: request-headers
+    type: header_modifier
+    stage: pre_request
+    enabled: true
+    config:
+      phase: request
+      add:
+        X-Tenant: example
+
+  # Redact the same codename from non-streaming responses.
+  - name: response-redaction
+    type: response_text_modifier
+    stage: post_response
+    enabled: true
+    config:
+      replacements:
+        SECRET_PROJECT: "[redacted]"
+
+  # Strip the upstream Server header and add a Cache-Control directive.
+  - name: response-headers
+    type: header_modifier
+    stage: post_response
+    enabled: true
+    config:
+      phase: response
+      add:
+        Cache-Control: no-store
+      remove:
+        - Server
+
+  # Redact the same codename from streaming responses. Text modifier hooks
+  # only affect text_delta events; start, stop, and usage events pass through
+  # unchanged.
+  - name: stream-redaction
+    type: stream_text_modifier
+    stage: stream_event
+    enabled: true
+    config:
+      replacements:
+        SECRET_PROJECT: "[redacted]"

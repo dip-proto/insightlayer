@@ -1,0 +1,23 @@
+server:
+  listen: ":0"
+  read_timeout: 5s
+  write_timeout: 0s
+  idle_timeout: 10s
+
+routing:
+  routes:
+    - name: openai-chat
+      priority: 100
+      inbound_protocol: openai
+      path_prefix: /v1/chat/completions
+      endpoint_kinds: [chat]
+      backend: openai-test
+
+backends:
+  - name: openai-test
+    protocol: openai
+    base_url: http://localhost:9999
+    auth:
+      mode: inject
+      header: Authorization
+      value: Bearer test-key

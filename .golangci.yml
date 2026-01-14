@@ -1,0 +1,25 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gocritic
+    - misspell
+    - unconvert
+    - unparam
+
+formatters:
+  enable:
+    - gofumpt
+
+output:
+  sort-order:
+    - file
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
