@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 
 	"github.com/j/insightlayer/internal/backend"
 	anthropicbe "github.com/j/insightlayer/internal/backend/anthropic"
@@ -25,15 +26,23 @@ type Handler struct {
 	logger   *slog.Logger
 }
 
+type HandlerOptions struct {
+	HTTPClient *http.Client
+}
+
 func NewHandler(cfg *config.Config, logger *slog.Logger) (*Handler, error) {
+	return NewHandlerWithOptions(cfg, logger, HandlerOptions{})
+}
+
+func NewHandlerWithOptions(cfg *config.Config, logger *slog.Logger, opts HandlerOptions) (*Handler, error) {
 	reg := backend.NewRegistry()
 	for _, bcfg := range cfg.Backends {
 		var be backend.Backend
 		switch pipeline.Protocol(bcfg.Protocol) {
 		case pipeline.ProtocolOpenAI:
-			be = openaibe.New(bcfg, nil)
+			be = openaibe.New(bcfg, opts.HTTPClient)
 		case pipeline.ProtocolAnthropic:
-			be = anthropicbe.New(bcfg, nil)
+			be = anthropicbe.New(bcfg, opts.HTTPClient)
 		default:
 			return nil, fmt.Errorf("unknown backend protocol: %s", bcfg.Protocol)
 		}

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -74,21 +73,28 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
+	format := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
+	if format == "yml" {
+		format = "yaml"
+	}
+	return Parse(raw, format)
+}
 
-	expanded := expandEnvVars(string(raw))
+func Parse(data []byte, format string) (*Config, error) {
+	expanded := expandEnvVars(string(data))
 
 	var cfg Config
-	switch ext := strings.ToLower(filepath.Ext(path)); ext {
-	case ".yaml", ".yml":
+	switch format {
+	case "yaml":
 		if err := yaml.Unmarshal([]byte(expanded), &cfg); err != nil {
 			return nil, fmt.Errorf("parse yaml config: %w", err)
 		}
-	case ".json":
+	case "json":
 		if err := json.Unmarshal([]byte(expanded), &cfg); err != nil {
 			return nil, fmt.Errorf("parse json config: %w", err)
 		}
 	default:
-		return nil, fmt.Errorf("unsupported config format: %s", ext)
+		return nil, fmt.Errorf("unsupported config format: %s", format)
 	}
 
 	cfg.setDefaults()
@@ -174,14 +180,11 @@ func (c *Config) validate() error {
 	return nil
 }
 
-var envVarPattern = regexp.MustCompile(`\$\{([^}]+)\}`)
-
 func expandEnvVars(s string) string {
-	return envVarPattern.ReplaceAllStringFunc(s, func(match string) string {
-		key := envVarPattern.FindStringSubmatch(match)[1]
+	return os.Expand(s, func(key string) string {
 		if val, ok := os.LookupEnv(key); ok {
 			return val
 		}
-		return match
+		return "${" + key + "}"
 	})
 }

@@ -239,6 +239,85 @@ func TestUnsupportedFormat(t *testing.T) {
 	}
 }
 
+func TestParseYAML(t *testing.T) {
+	cfg, err := Parse([]byte(`
+server:
+  listen: ":9090"
+backends:
+  - name: b
+    protocol: openai
+    base_url: https://api.example.com
+routing:
+  routes:
+    - name: r
+      path_prefix: /v1/
+      endpoint_kinds: [chat]
+      backend: b
+`), "yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Server.Listen != ":9090" {
+		t.Errorf("listen = %q, want %q", cfg.Server.Listen, ":9090")
+	}
+	if len(cfg.Backends) != 1 || cfg.Backends[0].Name != "b" {
+		t.Errorf("backends = %+v", cfg.Backends)
+	}
+}
+
+func TestParseJSON(t *testing.T) {
+	cfg, err := Parse([]byte(`{
+		"server": {"listen": ":7070"},
+		"backends": [{"name": "b", "protocol": "anthropic", "base_url": "https://api.anthropic.com"}]
+	}`), "json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Server.Listen != ":7070" {
+		t.Errorf("listen = %q, want %q", cfg.Server.Listen, ":7070")
+	}
+}
+
+func TestParseAppliesDefaults(t *testing.T) {
+	cfg, err := Parse([]byte(`{}`), "json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Server.Listen != ":8080" {
+		t.Errorf("default listen = %q, want %q", cfg.Server.Listen, ":8080")
+	}
+	if cfg.Server.ReadTimeout != 60*time.Second {
+		t.Errorf("default read_timeout = %v, want %v", cfg.Server.ReadTimeout, 60*time.Second)
+	}
+}
+
+func TestParseValidates(t *testing.T) {
+	_, err := Parse([]byte(`{"backends":[{"name":"","protocol":"openai","base_url":"https://a.com"}]}`), "json")
+	if err == nil {
+		t.Fatal("expected validation error for empty backend name")
+	}
+}
+
+func TestParseExpandsEnvVars(t *testing.T) {
+	t.Setenv("TEST_PARSE_KEY", "sk-from-env")
+	cfg, err := Parse([]byte(`{
+		"backends": [{"name": "b", "protocol": "openai", "base_url": "https://a.com", "auth": {"value": "Bearer ${TEST_PARSE_KEY}"}}]
+	}`), "json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Backends[0].Auth.Value != "Bearer sk-from-env" {
+		t.Errorf("auth value = %q, want %q", cfg.Backends[0].Auth.Value, "Bearer sk-from-env")
+	}
+}
+
+func TestParseUnsupportedFormat(t *testing.T) {
+	_, err := Parse([]byte(`key = "value"`), "toml")
+	if err == nil {
+		t.Fatal("expected error for unsupported format")
+	}
+}
+
 func writeTemp(t *testing.T, name, content string) string {
 	t.Helper()
 	dir := t.TempDir()

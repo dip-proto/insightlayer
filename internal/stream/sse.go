@@ -62,8 +62,32 @@ func (r *SSEReader) Next() (*SSEEvent, error) {
 	return nil, io.EOF
 }
 
+type SSEFrameWriter struct {
+	w io.Writer
+}
+
+func NewSSEFrameWriter(w io.Writer) *SSEFrameWriter {
+	return &SSEFrameWriter{w: w}
+}
+
+func (fw *SSEFrameWriter) WriteEvent(event SSEEvent) error {
+	if event.Event != "" {
+		if _, err := fmt.Fprintf(fw.w, "event: %s\n", event.Event); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(fw.w, "data: %s\n\n", event.Data); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (fw *SSEFrameWriter) WriteData(data string) error {
+	return fw.WriteEvent(SSEEvent{Data: data})
+}
+
 type SSEWriter struct {
-	w       http.ResponseWriter
+	frame   *SSEFrameWriter
 	flusher http.Flusher
 }
 
@@ -78,22 +102,13 @@ func NewSSEWriter(w http.ResponseWriter) (*SSEWriter, error) {
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 
-	return &SSEWriter{w: w, flusher: flusher}, nil
+	return &SSEWriter{frame: NewSSEFrameWriter(w), flusher: flusher}, nil
 }
 
 func (w *SSEWriter) WriteEvent(event SSEEvent) error {
-	if event.Event != "" {
-		if _, err := fmt.Fprintf(w.w, "event: %s\n", event.Event); err != nil {
-			return err
-		}
-	}
-	if _, err := fmt.Fprintf(w.w, "data: %s\n\n", event.Data); err != nil {
+	if err := w.frame.WriteEvent(event); err != nil {
 		return err
 	}
 	w.flusher.Flush()
 	return nil
-}
-
-func (w *SSEWriter) WriteData(data string) error {
-	return w.WriteEvent(SSEEvent{Data: data})
 }

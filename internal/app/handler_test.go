@@ -1877,6 +1877,52 @@ func TestStreamDoStreamFailureReturnsHTTPError(t *testing.T) {
 	}
 }
 
+func TestNewHandlerWithCustomClient(t *testing.T) {
+	openaiMock := mockOpenAIBackend()
+	defer openaiMock.Close()
+
+	transportUsed := false
+	customTransport := &roundTripRecorder{
+		wrapped: http.DefaultTransport,
+		onTrip: func() {
+			transportUsed = true
+		},
+	}
+	customClient := &http.Client{Transport: customTransport}
+
+	cfg := buildConfig(openaiMock.URL, openaiMock.URL)
+	handler, err := NewHandlerWithOptions(cfg, slog.Default(), HandlerOptions{
+		HTTPClient: customClient,
+	})
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/oai-oai/v1/chat/completions",
+		strings.NewReader(`{"model":"gpt-5.4","messages":[{"role":"user","content":"test"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !transportUsed {
+		t.Error("custom HTTP client transport was not used by the backend")
+	}
+}
+
+type roundTripRecorder struct {
+	wrapped http.RoundTripper
+	onTrip  func()
+}
+
+func (r *roundTripRecorder) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.onTrip()
+	return r.wrapped.RoundTrip(req)
+}
+
 type testPreRequestHook struct {
 	name string
 	fn   func(*pipeline.NormalizedRequest) error
