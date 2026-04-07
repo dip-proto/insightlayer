@@ -1,0 +1,18 @@
+server:
+  listen: ":8080"
+
+backends:
+  - name: lmstudio
+    protocol: openai
+    base_url: http://127.0.0.1:1234
+    auth:
+      mode: passthrough
+
+routing:
+  routes:
+    - name: openai-chat
+      priority: 100
+      inbound_protocol: openai
+      path_prefix: /v1/
+      endpoint_kinds: [chat]
+      backend: lmstudio

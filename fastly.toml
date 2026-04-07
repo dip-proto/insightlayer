@@ -1,0 +1,10 @@
+manifest_version = 3
+name = "insightlayer"
+language = "go"
+
+[local_server]
+
+  [local_server.backends]
+
+    [local_server.backends.lmstudio]
+    url = "http://127.0.0.1:1234"
