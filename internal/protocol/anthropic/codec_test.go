@@ -43,6 +43,29 @@ func TestDecodeRequest(t *testing.T) {
 	}
 }
 
+func TestDecodeRequestSystemBlocks(t *testing.T) {
+	input := `{
+		"model": "claude-sonnet-4-6",
+		"max_tokens": 256,
+		"system": [
+			{"type": "text", "text": "You are helpful."},
+			{"type": "text", "text": "Be concise."}
+		],
+		"messages": [
+			{"role": "user", "content": "Hi"}
+		]
+	}`
+
+	req, err := DecodeRequest([]byte(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if req.SystemPrompt != "You are helpful.\nBe concise." {
+		t.Errorf("system = %q, want two blocks joined by newline", req.SystemPrompt)
+	}
+}
+
 func TestEncodeResponse(t *testing.T) {
 	resp := &pipeline.NormalizedResponse{
 		ID:           "msg_123",

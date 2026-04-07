@@ -11,7 +11,7 @@ import (
 type MessagesRequest struct {
 	Model      string          `json:"model"`
 	MaxTokens  int             `json:"max_tokens"`
-	System     string          `json:"system,omitempty"`
+	System     json.RawMessage `json:"system,omitempty"`
 	Messages   []Message       `json:"messages"`
 	Stream     bool            `json:"stream,omitempty"`
 	Tools      []AnthropicTool `json:"tools,omitempty"`
@@ -86,6 +86,27 @@ func parseMessageContent(raw json.RawMessage) (string, []ContentBlock) {
 	return "", nil
 }
 
+func parseSystemPrompt(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var blocks []ContentBlock
+	if json.Unmarshal(raw, &blocks) == nil {
+		var parts []string
+		for _, b := range blocks {
+			if b.Type == "text" && b.Text != "" {
+				parts = append(parts, b.Text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+	return ""
+}
+
 func DecodeRequest(data []byte) (*pipeline.NormalizedRequest, error) {
 	var raw MessagesRequest
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -149,7 +170,7 @@ func DecodeRequest(data []byte) (*pipeline.NormalizedRequest, error) {
 		ClientProtocol: pipeline.ProtocolAnthropic,
 		EndpointKind:   pipeline.EndpointChat,
 		Model:          raw.Model,
-		SystemPrompt:   raw.System,
+		SystemPrompt:   parseSystemPrompt(raw.System),
 		Messages:       msgs,
 		InferenceParams: pipeline.InferenceParams{
 			MaxTokens: &maxTokens,
@@ -269,10 +290,15 @@ func EncodeRequest(req *pipeline.NormalizedRequest) ([]byte, error) {
 		maxTokens = *req.InferenceParams.MaxTokens
 	}
 
+	var systemRaw json.RawMessage
+	if req.SystemPrompt != "" {
+		systemRaw, _ = json.Marshal(req.SystemPrompt)
+	}
+
 	out := MessagesRequest{
 		Model:     req.Model,
 		MaxTokens: maxTokens,
-		System:    req.SystemPrompt,
+		System:    systemRaw,
 		Messages:  msgs,
 		Stream:    req.Stream,
 	}
