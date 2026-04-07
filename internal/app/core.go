@@ -219,10 +219,13 @@ func (h *Handler) handlePassthroughCore(ctx context.Context, req *InboundRequest
 }
 
 func errorResult(ctx context.Context, h *Handler, err error) *HandleResult {
-	return &HandleResult{Response: h.buildErrorResponse(ctx, err)}
+	return &HandleResult{Response: h.BuildErrorResponse(ctx, err)}
 }
 
-func (h *Handler) handleError(ctx context.Context, err error) *pipeline.PipelineError {
+// HandleError normalizes err into a PipelineError, runs error hooks, and
+// logs the result. Transport adapters use this for mid-stream errors where
+// the response headers have already been sent.
+func (h *Handler) HandleError(ctx context.Context, err error) *pipeline.PipelineError {
 	pErr, ok := err.(*pipeline.PipelineError)
 	if !ok {
 		pErr = &pipeline.PipelineError{
@@ -236,8 +239,12 @@ func (h *Handler) handleError(ctx context.Context, err error) *pipeline.Pipeline
 	return pErr
 }
 
-func (h *Handler) buildErrorResponse(ctx context.Context, err error) *OutboundResponse {
-	pErr := h.handleError(ctx, err)
+// BuildErrorResponse converts an error into a complete OutboundResponse with
+// JSON body and appropriate status code. Runs error hooks and logs via
+// HandleError internally. Transport adapters use this when the response has
+// not been started yet and a full HTTP error response is still possible.
+func (h *Handler) BuildErrorResponse(ctx context.Context, err error) *OutboundResponse {
+	pErr := h.HandleError(ctx, err)
 
 	headers := make(map[string][]string)
 	for k, vv := range pErr.Headers {

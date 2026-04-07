@@ -14,7 +14,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		ctx := observability.WithRequestID(r.Context(), requestIDFromHeaders(r.Header))
-		resp := h.buildErrorResponse(ctx, &pipeline.PipelineError{
+		resp := h.BuildErrorResponse(ctx, &pipeline.PipelineError{
 			StatusCode: http.StatusBadRequest,
 			Message:    "failed to read request body",
 		})
@@ -115,7 +115,7 @@ func (e *sseStreamEmitter) WriteDone() error {
 func (h *Handler) handleHTTPStream(ctx context.Context, w http.ResponseWriter, sr *StreamRequest) {
 	reader, err := sr.Backend.DoStream(ctx, sr.NormalizedReq)
 	if err != nil {
-		resp := h.buildErrorResponse(ctx, err)
+		resp := h.BuildErrorResponse(ctx, err)
 		writeOutboundResponse(w, resp)
 		return
 	}
@@ -123,7 +123,7 @@ func (h *Handler) handleHTTPStream(ctx context.Context, w http.ResponseWriter, s
 
 	emitter, err := newSSEStreamEmitter(w, sr.Resolved.Route.InboundProtocol, sr.NormalizedReq.ID, sr.NormalizedReq.Model)
 	if err != nil {
-		resp := h.buildErrorResponse(ctx, err)
+		resp := h.BuildErrorResponse(ctx, err)
 		writeOutboundResponse(w, resp)
 		return
 	}
@@ -134,7 +134,7 @@ func (h *Handler) handleHTTPStream(ctx context.Context, w http.ResponseWriter, s
 }
 
 func (h *Handler) handleHTTPStreamError(ctx context.Context, emitter StreamEmitter, err error) {
-	pErr := h.handleError(ctx, err)
+	pErr := h.HandleError(ctx, err)
 	_ = emitter.WriteEvent(&pipeline.StreamEvent{
 		Type:  pipeline.StreamEventError,
 		Error: pErr,
