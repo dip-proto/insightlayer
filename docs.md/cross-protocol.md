@@ -92,6 +92,20 @@ Authentication credentials are also translated automatically between
 `Authorization: Bearer` and `X-Api-Key` headers. See
 [Authentication](authentication.md) for details.
 
+### What does not get translated
+
+InsightLayer does not perform template conversion. Tool definitions, tool calls,
+and tool results are mapped between protocol field names (for example,
+`parameters` becomes `input_schema` and vice versa), but the schemas themselves
+are passed through as-is with no structural transformation.
+
+This matters most for tool calling. Models differ in how they expect tool
+definitions to be described, and some backends (local inference servers in
+particular) rely on chat templates to reshape tool schemas into a format the
+model was trained on. InsightLayer does not apply or convert these templates, so
+if your backend doesn't handle that step itself, tool calling may not work
+as expected.
+
 ## Anthropic client to OpenAI backend
 
 The reverse direction works just as well. If your client speaks the Anthropic
