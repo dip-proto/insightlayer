@@ -1,7 +1,6 @@
 package router
 
 import (
-	"net/http/httptest"
 	"testing"
 
 	"github.com/j/insightlayer/internal/config"
@@ -55,8 +54,7 @@ func TestBasicRouteResolution(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
-			req := httptest.NewRequest("POST", tt.path, nil)
-			resolved, err := r.Resolve(req)
+			resolved, err := r.Resolve(tt.path)
 			if err != nil {
 				t.Fatalf("resolve error: %v", err)
 			}
@@ -89,8 +87,7 @@ func TestAnthropicRouteResolution(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	req := httptest.NewRequest("POST", "/v1/messages", nil)
-	resolved, err := r.Resolve(req)
+	resolved, err := r.Resolve("/v1/messages")
 	if err != nil {
 		t.Fatalf("resolve error: %v", err)
 	}
@@ -118,8 +115,7 @@ func TestNoMatchReturnsError(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	req := httptest.NewRequest("POST", "/v2/something", nil)
-	_, err = r.Resolve(req)
+	_, err = r.Resolve("/v2/something")
 	if err == nil {
 		t.Fatal("expected error for unmatched route")
 	}
@@ -180,8 +176,7 @@ func TestDifferentPrioritiesNotAmbiguous(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
-	resolved, err := r.Resolve(req)
+	resolved, err := r.Resolve("/v1/chat/completions")
 	if err != nil {
 		t.Fatalf("resolve error: %v", err)
 	}
@@ -233,8 +228,7 @@ func TestPriorityThenPrefixLength(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
-	resolved, err := r.Resolve(req)
+	resolved, err := r.Resolve("/v1/chat/completions")
 	if err != nil {
 		t.Fatalf("resolve error: %v", err)
 	}
@@ -262,8 +256,7 @@ func TestCustomPrefixRoutes(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	req := httptest.NewRequest("POST", "/custom/v1/chat/completions", nil)
-	resolved, err := r.Resolve(req)
+	resolved, err := r.Resolve("/custom/v1/chat/completions")
 	if err != nil {
 		t.Fatalf("resolve error: %v", err)
 	}

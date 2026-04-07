@@ -327,6 +327,55 @@ func TestRequestIDPropagation(t *testing.T) {
 	})
 }
 
+func TestRequestIDFromHeadersCaseInsensitive(t *testing.T) {
+	cases := []struct {
+		name    string
+		headers map[string][]string
+		wantID  string
+	}{
+		{
+			name:    "canonical key",
+			headers: map[string][]string{"X-Request-Id": {"canonical-123"}},
+			wantID:  "canonical-123",
+		},
+		{
+			name:    "lowercase key",
+			headers: map[string][]string{"x-request-id": {"lower-456"}},
+			wantID:  "lower-456",
+		},
+		{
+			name:    "mixed case key",
+			headers: map[string][]string{"X-REQUEST-ID": {"upper-789"}},
+			wantID:  "upper-789",
+		},
+		{
+			name:    "empty value generates new ID",
+			headers: map[string][]string{"X-Request-Id": {""}},
+			wantID:  "",
+		},
+		{
+			name:    "missing key generates new ID",
+			headers: map[string][]string{},
+			wantID:  "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := requestIDFromHeaders(tc.headers)
+			if tc.wantID != "" {
+				if got != tc.wantID {
+					t.Errorf("requestIDFromHeaders = %q, want %q", got, tc.wantID)
+				}
+			} else {
+				if !strings.HasPrefix(got, "req-") {
+					t.Errorf("expected generated ID starting with req-, got %q", got)
+				}
+			}
+		})
+	}
+}
+
 func TestHookIntegration(t *testing.T) {
 	openaiMock := mockOpenAIBackend()
 	defer openaiMock.Close()
@@ -1780,6 +1829,52 @@ func mapKeys(m map[string]json.RawMessage) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+func TestStreamDoStreamFailureReturnsHTTPError(t *testing.T) {
+	failingMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = fmt.Fprint(w, `{"error":{"message":"backend overloaded","type":"overloaded_error"}}`)
+	}))
+	defer failingMock.Close()
+
+	cfg := buildConfig(failingMock.URL, failingMock.URL)
+	handler, err := NewHandler(cfg, slog.Default())
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	errorHookRan := false
+	handler.HookManager().AddError(&testErrorHook{
+		name: "catch-dostream-failure",
+		fn: func(pErr *pipeline.PipelineError) error {
+			errorHookRan = true
+			return nil
+		},
+	})
+
+	req := httptest.NewRequest("POST", "/oai-oai/v1/chat/completions",
+		strings.NewReader(`{"model":"gpt-5.4","messages":[{"role":"user","content":"test"}],"stream":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusOK {
+		t.Errorf("DoStream failure should not produce 200, got %d", rec.Code)
+	}
+	ct := rec.Header().Get("Content-Type")
+	if ct == "text/event-stream" {
+		t.Error("DoStream failure should not produce text/event-stream response")
+	}
+	if !errorHookRan {
+		t.Error("error hook should run on DoStream failure")
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "backend overloaded") {
+		t.Errorf("response should contain upstream error message, got:\n%s", body)
+	}
 }
 
 type testPreRequestHook struct {

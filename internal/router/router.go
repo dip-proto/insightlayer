@@ -2,7 +2,6 @@ package router
 
 import (
 	"fmt"
-	"net/http"
 	"sort"
 	"strings"
 
@@ -108,9 +107,7 @@ func kindsOverlap(a, b map[pipeline.EndpointKind]bool) bool {
 	return false
 }
 
-func (r *Router) Resolve(req *http.Request) (*ResolvedRoute, error) {
-	path := req.URL.Path
-
+func (r *Router) Resolve(path string) (*ResolvedRoute, error) {
 	for _, route := range r.routes {
 		if !strings.HasPrefix(path, route.PathPrefix) {
 			continue
@@ -131,7 +128,7 @@ func (r *Router) Resolve(req *http.Request) (*ResolvedRoute, error) {
 	}
 
 	return nil, &pipeline.PipelineError{
-		StatusCode: http.StatusNotFound,
+		StatusCode: 404,
 		Message:    fmt.Sprintf("no route matched for %s", path),
 	}
 }
