@@ -376,7 +376,7 @@ func TestRequestIDFromHeadersCaseInsensitive(t *testing.T) {
 	}
 }
 
-func TestResponseHeadersTraceContext(t *testing.T) {
+func TestTraceHeaderPropagation(t *testing.T) {
 	openaiMock := mockOpenAIBackend()
 	defer openaiMock.Close()
 
@@ -386,97 +386,68 @@ func TestResponseHeadersTraceContext(t *testing.T) {
 		t.Fatalf("init: %v", err)
 	}
 
-	t.Run("trace headers propagated on success", func(t *testing.T) {
-		result := handler.Handle(context.Background(), &InboundRequest{
-			RequestID: "test-1",
-			Method:    "POST",
-			Path:      "/oai-oai/v1/chat/completions",
-			Headers: map[string][]string{
-				"Traceparent": {"00-abc-def-01"},
-				"Tracestate":  {"vendor=value"},
-			},
-			Body: []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hi"}]}`),
-		})
-
-		if result.ResponseHeaders == nil {
-			t.Fatal("ResponseHeaders should not be nil")
-		}
-		if got := result.ResponseHeaders["Traceparent"]; len(got) == 0 || got[0] != "00-abc-def-01" {
-			t.Errorf("Traceparent = %v, want [00-abc-def-01]", got)
-		}
-		if got := result.ResponseHeaders["Tracestate"]; len(got) == 0 || got[0] != "vendor=value" {
-			t.Errorf("Tracestate = %v, want [vendor=value]", got)
-		}
-	})
-
-	t.Run("trace headers propagated on error", func(t *testing.T) {
-		result := handler.Handle(context.Background(), &InboundRequest{
-			RequestID: "test-2",
-			Method:    "POST",
-			Path:      "/nonexistent/path",
-			Headers: map[string][]string{
-				"Traceparent": {"00-err-trace-01"},
-			},
-			Body: []byte(`{}`),
-		})
-
-		if result.Response == nil {
-			t.Fatal("expected error response")
-		}
-		if result.ResponseHeaders == nil {
-			t.Fatal("ResponseHeaders should not be nil on error")
-		}
-		if got := result.ResponseHeaders["Traceparent"]; len(got) == 0 || got[0] != "00-err-trace-01" {
-			t.Errorf("Traceparent = %v, want [00-err-trace-01]", got)
-		}
-	})
-
-	t.Run("no trace headers when absent", func(t *testing.T) {
-		result := handler.Handle(context.Background(), &InboundRequest{
-			RequestID: "test-3",
-			Method:    "POST",
-			Path:      "/oai-oai/v1/chat/completions",
-			Headers:   map[string][]string{},
-			Body:      []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hi"}]}`),
-		})
-
-		if result.ResponseHeaders == nil {
-			t.Fatal("ResponseHeaders should not be nil")
-		}
-		if len(result.ResponseHeaders) != 0 {
-			t.Errorf("ResponseHeaders should be empty when no trace headers sent, got %v", result.ResponseHeaders)
-		}
-	})
-
-	t.Run("trace headers on HTTP response via ServeHTTP", func(t *testing.T) {
+	t.Run("success response", func(t *testing.T) {
 		req := httptest.NewRequest("POST", "/oai-oai/v1/chat/completions",
 			strings.NewReader(`{"model":"gpt-5.4","messages":[{"role":"user","content":"test"}]}`))
-		req.Header.Set("Traceparent", "00-http-trace-01")
-		req.Header.Set("Tracestate", "vendor=http")
+		req.Header.Set("Traceparent", "00-abc-def-01")
+		req.Header.Set("Tracestate", "vendor=value")
 		rec := httptest.NewRecorder()
 
 		handler.ServeHTTP(rec, req)
 
-		if got := rec.Header().Get("Traceparent"); got != "00-http-trace-01" {
-			t.Errorf("HTTP Traceparent = %q, want %q", got, "00-http-trace-01")
+		if got := rec.Header().Get("Traceparent"); got != "00-abc-def-01" {
+			t.Errorf("Traceparent = %q, want %q", got, "00-abc-def-01")
 		}
-		if got := rec.Header().Get("Tracestate"); got != "vendor=http" {
-			t.Errorf("HTTP Tracestate = %q, want %q", got, "vendor=http")
+		if got := rec.Header().Get("Tracestate"); got != "vendor=value" {
+			t.Errorf("Tracestate = %q, want %q", got, "vendor=value")
 		}
 	})
 
-	t.Run("trace headers on HTTP error response via ServeHTTP", func(t *testing.T) {
+	t.Run("error response", func(t *testing.T) {
 		req := httptest.NewRequest("POST", "/nonexistent/path",
 			strings.NewReader(`{}`))
-		req.Header.Set("Traceparent", "00-http-err-01")
+		req.Header.Set("Traceparent", "00-err-trace-01")
 		rec := httptest.NewRecorder()
 
 		handler.ServeHTTP(rec, req)
 
-		if got := rec.Header().Get("Traceparent"); got != "00-http-err-01" {
-			t.Errorf("HTTP error Traceparent = %q, want %q", got, "00-http-err-01")
+		if got := rec.Header().Get("Traceparent"); got != "00-err-trace-01" {
+			t.Errorf("Traceparent = %q, want %q", got, "00-err-trace-01")
 		}
 	})
+
+	t.Run("absent when not sent", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/oai-oai/v1/chat/completions",
+			strings.NewReader(`{"model":"gpt-5.4","messages":[{"role":"user","content":"test"}]}`))
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if got := rec.Header().Get("Traceparent"); got != "" {
+			t.Errorf("Traceparent should be absent, got %q", got)
+		}
+	})
+
+	t.Run("body read error", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/oai-oai/v1/chat/completions", &brokenReader{})
+		req.Header.Set("Traceparent", "00-body-err-01")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if got := rec.Header().Get("X-Request-Id"); got == "" {
+			t.Error("should have X-Request-Id on body read error")
+		}
+		if got := rec.Header().Get("Traceparent"); got != "00-body-err-01" {
+			t.Errorf("Traceparent = %q, want %q on body read error", got, "00-body-err-01")
+		}
+	})
+}
+
+type brokenReader struct{}
+
+func (r *brokenReader) Read([]byte) (int, error) {
+	return 0, fmt.Errorf("simulated read failure")
 }
 
 func TestHookIntegration(t *testing.T) {
