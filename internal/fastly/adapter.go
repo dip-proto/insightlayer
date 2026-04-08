@@ -23,13 +23,18 @@ func NewAdapter(handler *app.Handler) *Adapter {
 }
 
 func (a *Adapter) ServeHTTP(ctx context.Context, w fsthttp.ResponseWriter, r *fsthttp.Request) {
+	if r.URL.Path == "/health" {
+		a.handleHealth(w, r)
+		return
+	}
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to read request body")
 		return
 	}
 
-	requestID := requestIDFromHeaders(r.Header)
+	requestID := app.NormalizeRequestID(map[string][]string(r.Header))
 	ctx = observability.WithRequestID(ctx, requestID)
 
 	inbound := &app.InboundRequest{
@@ -43,6 +48,11 @@ func (a *Adapter) ServeHTTP(ctx context.Context, w fsthttp.ResponseWriter, r *fs
 	result := a.handler.Handle(ctx, inbound)
 
 	w.Header().Set("X-Request-Id", requestID)
+	for k, vv := range result.ResponseHeaders {
+		for _, v := range vv {
+			w.Header().Set(k, v)
+		}
+	}
 
 	if result.Stream != nil {
 		a.handleStream(ctx, w, result.Stream)
@@ -50,6 +60,20 @@ func (a *Adapter) ServeHTTP(ctx context.Context, w fsthttp.ResponseWriter, r *fs
 	}
 
 	writeOutboundResponse(w, result.Response)
+}
+
+func (a *Adapter) handleHealth(w fsthttp.ResponseWriter, r *fsthttp.Request) {
+	if r.Method != "GET" && r.Method != "HEAD" {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method == "HEAD" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"ok"}`))
 }
 
 func writeOutboundResponse(w fsthttp.ResponseWriter, resp *app.OutboundResponse) {
@@ -87,13 +111,6 @@ func (a *Adapter) handleStream(ctx context.Context, w fsthttp.ResponseWriter, sr
 		})
 		emitter.WriteDone()
 	}
-}
-
-func requestIDFromHeaders(h fsthttp.Header) string {
-	if v := h.Get("X-Request-Id"); v != "" {
-		return v
-	}
-	return ""
 }
 
 func BuildTransport(backends map[string]*url.URL) *fsthttp.Transport {
