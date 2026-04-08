@@ -30,8 +30,9 @@ type OutboundResponse struct {
 }
 
 type HandleResult struct {
-	Response *OutboundResponse
-	Stream   *StreamRequest
+	Response        *OutboundResponse
+	Stream          *StreamRequest
+	ResponseHeaders map[string][]string
 }
 
 type StreamRequest struct {
@@ -53,25 +54,27 @@ type StreamEmitter interface {
 func (h *Handler) Handle(ctx context.Context, req *InboundRequest) *HandleResult {
 	resolved, err := h.router.Resolve(req.Path)
 	if err != nil {
-		return errorResult(ctx, h, err)
+		return errorResult(ctx, h, req, err)
 	}
 
 	be, err := h.backends.Get(resolved.Route.BackendName)
 	if err != nil {
-		return errorResult(ctx, h, err)
+		return errorResult(ctx, h, req, err)
 	}
+
+	rh := collectResponseHeaders(req)
 
 	if isPassthroughEndpoint(resolved) {
 		resp, err := h.handlePassthroughCore(ctx, req, be, resolved)
 		if err != nil {
-			return errorResult(ctx, h, err)
+			return errorResult(ctx, h, req, err)
 		}
-		return &HandleResult{Response: resp}
+		return &HandleResult{Response: resp, ResponseHeaders: rh}
 	}
 
 	nReq, err := h.decodeRequest(resolved, req.Body)
 	if err != nil {
-		return errorResult(ctx, h, &pipeline.PipelineError{
+		return errorResult(ctx, h, req, &pipeline.PipelineError{
 			StatusCode: http.StatusBadRequest,
 			Message:    err.Error(),
 		})
@@ -81,7 +84,7 @@ func (h *Handler) Handle(ctx context.Context, req *InboundRequest) *HandleResult
 	nReq.Headers = http.Header(req.Headers)
 
 	if !be.Supports(nReq.EndpointKind) {
-		return errorResult(ctx, h, &pipeline.PipelineError{
+		return errorResult(ctx, h, req, &pipeline.PipelineError{
 			StatusCode: http.StatusBadRequest,
 			Message: fmt.Sprintf(
 				"backend %q does not support %s endpoints",
@@ -91,11 +94,12 @@ func (h *Handler) Handle(ctx context.Context, req *InboundRequest) *HandleResult
 	}
 
 	if err := h.hooks.RunPreRequest(ctx, nReq); err != nil {
-		return errorResult(ctx, h, err)
+		return errorResult(ctx, h, req, err)
 	}
 
 	if nReq.Stream {
 		return &HandleResult{
+			ResponseHeaders: rh,
 			Stream: &StreamRequest{
 				NormalizedReq: nReq,
 				Backend:       be,
@@ -106,9 +110,9 @@ func (h *Handler) Handle(ctx context.Context, req *InboundRequest) *HandleResult
 
 	resp, err := h.handleNonStreamCore(ctx, nReq, be, resolved)
 	if err != nil {
-		return errorResult(ctx, h, err)
+		return errorResult(ctx, h, req, err)
 	}
-	return &HandleResult{Response: resp}
+	return &HandleResult{Response: resp, ResponseHeaders: rh}
 }
 
 func (h *Handler) handleNonStreamCore(ctx context.Context, req *pipeline.NormalizedRequest, be backend.Backend, resolved *router.ResolvedRoute) (*OutboundResponse, error) {
@@ -218,8 +222,21 @@ func (h *Handler) handlePassthroughCore(ctx context.Context, req *InboundRequest
 	return out, nil
 }
 
-func errorResult(ctx context.Context, h *Handler, err error) *HandleResult {
-	return &HandleResult{Response: h.BuildErrorResponse(ctx, err)}
+func errorResult(ctx context.Context, h *Handler, req *InboundRequest, err error) *HandleResult {
+	return &HandleResult{
+		Response:        h.BuildErrorResponse(ctx, err),
+		ResponseHeaders: collectResponseHeaders(req),
+	}
+}
+
+func collectResponseHeaders(req *InboundRequest) map[string][]string {
+	h := make(map[string][]string)
+	for _, key := range []string{"Traceparent", "Tracestate"} {
+		if v := headerGet(req.Headers, key); v != "" {
+			h[key] = []string{v}
+		}
+	}
+	return h
 }
 
 // HandleError normalizes err into a PipelineError, runs error hooks, and
@@ -293,7 +310,7 @@ func (h *Handler) HandleStream(ctx context.Context, reader backend.StreamReader,
 	return emitter.WriteDone()
 }
 
-func requestIDFromHeaders(headers map[string][]string) string {
+func NormalizeRequestID(headers map[string][]string) string {
 	if v := headerGet(headers, "X-Request-Id"); v != "" {
 		return v
 	}

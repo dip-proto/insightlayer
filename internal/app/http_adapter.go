@@ -13,7 +13,7 @@ import (
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		ctx := observability.WithRequestID(r.Context(), requestIDFromHeaders(r.Header))
+		ctx := observability.WithRequestID(r.Context(), NormalizeRequestID(r.Header))
 		resp := h.BuildErrorResponse(ctx, &pipeline.PipelineError{
 			StatusCode: http.StatusBadRequest,
 			Message:    "failed to read request body",
@@ -22,7 +22,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	requestID := requestIDFromHeaders(r.Header)
+	requestID := NormalizeRequestID(r.Header)
 	ctx := observability.WithRequestID(r.Context(), requestID)
 
 	inbound := &InboundRequest{
@@ -36,11 +36,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	result := h.Handle(ctx, inbound)
 
 	w.Header().Set("X-Request-Id", requestID)
-	if tp := r.Header.Get("Traceparent"); tp != "" {
-		w.Header().Set("Traceparent", tp)
-	}
-	if ts := r.Header.Get("Tracestate"); ts != "" {
-		w.Header().Set("Tracestate", ts)
+	for k, vv := range result.ResponseHeaders {
+		for _, v := range vv {
+			w.Header().Set(k, v)
+		}
 	}
 
 	if result.Stream != nil {
