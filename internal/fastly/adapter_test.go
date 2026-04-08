@@ -32,12 +32,12 @@ func newMockResponseWriter() *mockResponseWriter {
 	return &mockResponseWriter{header: fsthttp.NewHeader()}
 }
 
-func (m *mockResponseWriter) Header() fsthttp.Header         { return m.header }
-func (m *mockResponseWriter) WriteHeader(code int)            { m.statusCode = code }
-func (m *mockResponseWriter) Write(p []byte) (int, error)     { return m.body.Write(p) }
-func (m *mockResponseWriter) Close() error                    { return nil }
-func (m *mockResponseWriter) SetManualFramingMode(bool)       {}
-func (m *mockResponseWriter) Append(io.ReadCloser) error      { return nil }
+func (m *mockResponseWriter) Header() fsthttp.Header      { return m.header }
+func (m *mockResponseWriter) WriteHeader(code int)        { m.statusCode = code }
+func (m *mockResponseWriter) Write(p []byte) (int, error) { return m.body.Write(p) }
+func (m *mockResponseWriter) Close() error                { return nil }
+func (m *mockResponseWriter) SetManualFramingMode(bool)   {}
+func (m *mockResponseWriter) Append(io.ReadCloser) error  { return nil }
 
 func mockOpenAIBackend() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
