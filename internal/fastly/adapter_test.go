@@ -19,6 +19,7 @@ import (
 	"github.com/j/insightlayer/internal/config"
 	"github.com/j/insightlayer/internal/pipeline"
 	"github.com/j/insightlayer/internal/stream"
+	"github.com/j/insightlayer/internal/testkit"
 )
 
 type mockResponseWriter struct {
@@ -301,7 +302,7 @@ func TestBodyReadErrorPreservesHeaders(t *testing.T) {
 		Method: "POST",
 		URL:    u,
 		Header: fsthttp.NewHeader(),
-		Body:   io.NopCloser(&brokenReader{}),
+		Body:   io.NopCloser(&testkit.BrokenReader{}),
 	}
 	r.Header.Set("Traceparent", "00-body-err-01")
 
@@ -316,12 +317,6 @@ func TestBodyReadErrorPreservesHeaders(t *testing.T) {
 	if got := w.header.Get("traceparent"); got != "00-body-err-01" {
 		t.Errorf("Traceparent = %q, want %q on body read error", got, "00-body-err-01")
 	}
-}
-
-type brokenReader struct{}
-
-func (r *brokenReader) Read([]byte) (int, error) {
-	return 0, fmt.Errorf("simulated read failure")
 }
 
 func TestBuildTransportFromBackendURLs(t *testing.T) {

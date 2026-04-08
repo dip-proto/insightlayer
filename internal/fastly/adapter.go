@@ -37,7 +37,11 @@ func (a *Adapter) ServeHTTP(ctx context.Context, w fsthttp.ResponseWriter, r *fs
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "failed to read request body")
+		resp := a.handler.BuildErrorResponse(ctx, &pipeline.PipelineError{
+			StatusCode: http.StatusBadRequest,
+			Message:    "failed to read request body",
+		})
+		writeOutboundResponse(w, resp)
 		return
 	}
 
@@ -89,12 +93,6 @@ func writeOutboundResponse(w fsthttp.ResponseWriter, resp *app.OutboundResponse)
 	}
 	w.WriteHeader(resp.StatusCode)
 	w.Write(resp.Body)
-}
-
-func writeError(w fsthttp.ResponseWriter, status int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	w.Write([]byte(`{"error":{"message":"` + msg + `","type":"proxy_error"}}`))
 }
 
 func (a *Adapter) handleStream(ctx context.Context, w fsthttp.ResponseWriter, sr *app.StreamRequest) {
