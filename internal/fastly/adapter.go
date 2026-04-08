@@ -28,31 +28,28 @@ func (a *Adapter) ServeHTTP(ctx context.Context, w fsthttp.ResponseWriter, r *fs
 		return
 	}
 
+	headers := map[string][]string(r.Header)
+	requestID := app.NormalizeRequestID(headers)
+	ctx = observability.WithRequestID(ctx, requestID)
+
+	w.Header().Set("X-Request-Id", requestID)
+	setTraceHeaders(w, headers)
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to read request body")
 		return
 	}
 
-	requestID := app.NormalizeRequestID(map[string][]string(r.Header))
-	ctx = observability.WithRequestID(ctx, requestID)
-
 	inbound := &app.InboundRequest{
 		RequestID: requestID,
 		Method:    r.Method,
 		Path:      r.URL.Path,
-		Headers:   map[string][]string(r.Header),
+		Headers:   headers,
 		Body:      body,
 	}
 
 	result := a.handler.Handle(ctx, inbound)
-
-	w.Header().Set("X-Request-Id", requestID)
-	for k, vv := range result.ResponseHeaders {
-		for _, v := range vv {
-			w.Header().Set(k, v)
-		}
-	}
 
 	if result.Stream != nil {
 		a.handleStream(ctx, w, result.Stream)
@@ -74,6 +71,14 @@ func (a *Adapter) handleHealth(w fsthttp.ResponseWriter, r *fsthttp.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status":"ok"}`))
+}
+
+func setTraceHeaders(w fsthttp.ResponseWriter, headers map[string][]string) {
+	for _, key := range []string{"Traceparent", "Tracestate"} {
+		if v := app.HeaderGet(headers, key); v != "" {
+			w.Header().Set(key, v)
+		}
+	}
 }
 
 func writeOutboundResponse(w fsthttp.ResponseWriter, resp *app.OutboundResponse) {

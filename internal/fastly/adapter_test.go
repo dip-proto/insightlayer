@@ -292,6 +292,38 @@ func TestErrorResponse(t *testing.T) {
 	}
 }
 
+func TestBodyReadErrorPreservesHeaders(t *testing.T) {
+	adapter := NewAdapter(buildTestHandler("http://unused"))
+	w := newMockResponseWriter()
+
+	u, _ := url.Parse("http://localhost/v1/chat/completions")
+	r := &fsthttp.Request{
+		Method: "POST",
+		URL:    u,
+		Header: fsthttp.NewHeader(),
+		Body:   io.NopCloser(&brokenReader{}),
+	}
+	r.Header.Set("Traceparent", "00-body-err-01")
+
+	adapter.ServeHTTP(context.Background(), w, r)
+
+	if got := w.header.Get("x-request-id"); got == "" {
+		t.Error("should have X-Request-Id on body read error")
+	}
+	if !strings.HasPrefix(w.header.Get("x-request-id"), "req-") {
+		t.Errorf("X-Request-Id should start with req-, got %q", w.header.Get("x-request-id"))
+	}
+	if got := w.header.Get("traceparent"); got != "00-body-err-01" {
+		t.Errorf("Traceparent = %q, want %q on body read error", got, "00-body-err-01")
+	}
+}
+
+type brokenReader struct{}
+
+func (r *brokenReader) Read([]byte) (int, error) {
+	return 0, fmt.Errorf("simulated read failure")
+}
+
 func TestBuildTransportFromBackendURLs(t *testing.T) {
 	backends := map[string]*url.URL{
 		"openai":    mustURL("https://api.openai.com"),
