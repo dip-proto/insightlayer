@@ -2,6 +2,7 @@ package testkit
 
 import (
 	"embed"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -20,6 +21,12 @@ func LoadFixture(t *testing.T, name string) []byte {
 
 func LoadFixtureString(t *testing.T, name string) string {
 	return string(LoadFixture(t, name))
+}
+
+type BrokenReader struct{}
+
+func (r *BrokenReader) Read([]byte) (int, error) {
+	return 0, fmt.Errorf("simulated read failure")
 }
 
 func LoadSSELines(t *testing.T, name string) []string {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/j/insightlayer/internal/config"
 	"github.com/j/insightlayer/internal/pipeline"
+	"github.com/j/insightlayer/internal/testkit"
 )
 
 func mockOpenAIBackend() *httptest.Server {
@@ -429,7 +430,7 @@ func TestTraceHeaderPropagation(t *testing.T) {
 	})
 
 	t.Run("body read error", func(t *testing.T) {
-		req := httptest.NewRequest("POST", "/oai-oai/v1/chat/completions", &brokenReader{})
+		req := httptest.NewRequest("POST", "/oai-oai/v1/chat/completions", &testkit.BrokenReader{})
 		req.Header.Set("Traceparent", "00-body-err-01")
 		rec := httptest.NewRecorder()
 
@@ -442,12 +443,6 @@ func TestTraceHeaderPropagation(t *testing.T) {
 			t.Errorf("Traceparent = %q, want %q on body read error", got, "00-body-err-01")
 		}
 	})
-}
-
-type brokenReader struct{}
-
-func (r *brokenReader) Read([]byte) (int, error) {
-	return 0, fmt.Errorf("simulated read failure")
 }
 
 func TestHookIntegration(t *testing.T) {
