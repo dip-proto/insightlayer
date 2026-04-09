@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/j/insightlayer/internal/config"
 	"github.com/j/insightlayer/internal/pipeline"
@@ -154,18 +152,6 @@ func DoRawProxy(ctx context.Context, client *http.Client, baseURL, method, path 
 }
 
 const maxResponseBodyBytes = 50 * 1024 * 1024
-
-func DefaultHTTPClient() *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout: 30 * time.Second,
-			}).DialContext,
-			TLSHandshakeTimeout:   15 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
-		},
-	}
-}
 
 func DoHTTP(client *http.Client, req *http.Request, label string) ([]byte, error) {
 	resp, err := client.Do(req)
