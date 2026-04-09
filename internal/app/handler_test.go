@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -2000,6 +2001,151 @@ type testPreRequestHook struct {
 func (h *testPreRequestHook) Name() string { return h.name }
 func (h *testPreRequestHook) Execute(_ context.Context, req *pipeline.NormalizedRequest) error {
 	return h.fn(req)
+}
+
+func TestRequestBodySizeLimit(t *testing.T) {
+	openaiMock := mockOpenAIBackend()
+	defer openaiMock.Close()
+	anthropicMock := mockAnthropicBackend()
+	defer anthropicMock.Close()
+
+	cfg := buildConfig(openaiMock.URL, anthropicMock.URL)
+	handler, err := NewHandler(cfg, slog.Default())
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	atLimit := bytes.Repeat([]byte("x"), maxRequestBodyBytes)
+	req := httptest.NewRequest("POST", "/oai-oai/v1/chat/completions", bytes.NewReader(atLimit))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code == http.StatusRequestEntityTooLarge {
+		t.Error("body at limit should not return 413")
+	}
+
+	overLimit := bytes.Repeat([]byte("x"), maxRequestBodyBytes+1)
+	req = httptest.NewRequest("POST", "/oai-oai/v1/chat/completions", bytes.NewReader(overLimit))
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("body over limit should return 413, got %d", rec.Code)
+	}
+}
+
+func TestPassthroughResponseTooLarge(t *testing.T) {
+	upstreamMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		chunk := make([]byte, 4096)
+		for remaining := maxResponseBodyBytes + 1; remaining > 0; {
+			n := remaining
+			if n > len(chunk) {
+				n = len(chunk)
+			}
+			_, _ = w.Write(chunk[:n])
+			remaining -= n
+		}
+	}))
+	defer upstreamMock.Close()
+
+	cfg := buildPassthroughConfig(upstreamMock.URL)
+	handler, err := NewHandler(cfg, slog.Default())
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/v1/completions",
+		strings.NewReader(`{"model":"gpt-5.4","prompt":"test"}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("oversized passthrough response should return 502, got %d", rec.Code)
+	}
+}
+
+func TestAnthropicToolChoiceNoneReturns400(t *testing.T) {
+	anthropicMock := mockAnthropicBackend()
+	defer anthropicMock.Close()
+	openaiMock := mockOpenAIBackend()
+	defer openaiMock.Close()
+
+	cfg := buildConfig(openaiMock.URL, anthropicMock.URL)
+	handler, err := NewHandler(cfg, slog.Default())
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	body := `{
+		"model": "claude-sonnet-4-6",
+		"messages": [{"role": "user", "content": "test"}],
+		"tools": [{"type": "function", "function": {"name": "f", "description": "d", "parameters": {"type": "object", "properties": {}}}}],
+		"tool_choice": "none"
+	}`
+	req := httptest.NewRequest("POST", "/oai-ant/v1/chat/completions", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("tool_choice none to Anthropic should return 400, got %d", rec.Code)
+	}
+	var resp map[string]any
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	msg, _ := resp["error"].(map[string]any)["message"].(string)
+	if !strings.Contains(msg, "none") {
+		t.Errorf("error should mention \"none\", got: %q", msg)
+	}
+}
+
+func TestMethodGate(t *testing.T) {
+	upstreamMock := mockOpenAIFullBackend()
+	defer upstreamMock.Close()
+
+	cfg := buildPassthroughConfig(upstreamMock.URL)
+	handler, err := NewHandler(cfg, slog.Default())
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET /v1/models should succeed, got %d", rec.Code)
+	}
+
+	req = httptest.NewRequest("POST", "/v1/models", strings.NewReader("{}"))
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST /v1/models should return 405, got %d", rec.Code)
+	}
+
+	openaiMock := mockOpenAIBackend()
+	defer openaiMock.Close()
+	anthropicMock := mockAnthropicBackend()
+	defer anthropicMock.Close()
+
+	chatCfg := buildConfig(openaiMock.URL, anthropicMock.URL)
+	chatHandler, err := NewHandler(chatCfg, slog.Default())
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	req = httptest.NewRequest("POST", "/oai-oai/v1/chat/completions",
+		strings.NewReader(`{"model":"gpt-5.4","messages":[{"role":"user","content":"test"}]}`))
+	rec = httptest.NewRecorder()
+	chatHandler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("POST /v1/chat/completions should succeed, got %d", rec.Code)
+	}
+
+	req = httptest.NewRequest("GET", "/oai-oai/v1/chat/completions", nil)
+	rec = httptest.NewRecorder()
+	chatHandler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET /v1/chat/completions should return 405, got %d", rec.Code)
+	}
 }
 
 type testPostResponseHook struct {

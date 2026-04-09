@@ -145,6 +145,23 @@ func (c *Config) validate() error {
 		default:
 			return fmt.Errorf("backend %q: unknown auth mode %q", b.Name, b.Auth.Mode)
 		}
+
+		if err := checkUnresolved(fmt.Sprintf("backend %q base_url", b.Name), b.BaseURL); err != nil {
+			return err
+		}
+		if err := checkUnresolved(fmt.Sprintf("backend %q auth.value", b.Name), b.Auth.Value); err != nil {
+			return err
+		}
+		for k, v := range b.DefaultHeaders {
+			if err := checkUnresolved(fmt.Sprintf("backend %q default_headers[%s]", b.Name, k), v); err != nil {
+				return err
+			}
+		}
+	}
+
+	validKindsForProtocol := map[string]map[string]bool{
+		"anthropic": {"chat": true},
+		"openai":    {"chat": true, "completion": true, "embedding": true, "model_list": true},
 	}
 
 	routeNames := make(map[string]bool, len(c.Routing.Routes))
@@ -166,6 +183,16 @@ func (c *Config) validate() error {
 		if r.PathPrefix == "" {
 			return fmt.Errorf("route %q: path_prefix is required", r.Name)
 		}
+
+		allowed, ok := validKindsForProtocol[r.InboundProtocol]
+		if !ok {
+			return fmt.Errorf("route %q: unknown inbound_protocol %q", r.Name, r.InboundProtocol)
+		}
+		for _, kind := range r.EndpointKinds {
+			if !allowed[kind] {
+				return fmt.Errorf("route %q: endpoint kind %q is not supported by inbound protocol %q", r.Name, kind, r.InboundProtocol)
+			}
+		}
 	}
 
 	for _, h := range c.Hooks {
@@ -177,6 +204,17 @@ func (c *Config) validate() error {
 		}
 	}
 
+	return nil
+}
+
+func checkUnresolved(field, value string) error {
+	start := strings.Index(value, "${")
+	if start >= 0 {
+		end := strings.Index(value[start:], "}")
+		if end >= 0 {
+			return fmt.Errorf("%s contains unresolved environment variable: %s", field, value[start:start+end+1])
+		}
+	}
 	return nil
 }
 

@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/j/insightlayer/internal/config"
 	"github.com/j/insightlayer/internal/pipeline"
@@ -85,6 +88,30 @@ var propagatedHeaders = []string{
 	"Tracestate",
 }
 
+// SanitizeClientHeaders returns a copy of h with any X-* headers removed that
+// are not in the propagated allowlist. Call this on client-supplied headers
+// before they enter the pipeline so that hooks can freely add X-* headers
+// without risking forwarding of client-injected values.
+func SanitizeClientHeaders(h http.Header) http.Header {
+	out := h.Clone()
+	for k := range out {
+		if len(k) < 2 || k[:2] != "X-" {
+			continue
+		}
+		allowed := false
+		for _, a := range propagatedHeaders {
+			if strings.EqualFold(k, a) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			out.Del(k)
+		}
+	}
+	return out
+}
+
 func PropagateHeaders(src http.Header, dst http.Header) {
 	for _, key := range propagatedHeaders {
 		if v := src.Get(key); v != "" {
@@ -126,6 +153,20 @@ func DoRawProxy(ctx context.Context, client *http.Client, baseURL, method, path 
 	return client.Do(httpReq)
 }
 
+const maxResponseBodyBytes = 50 * 1024 * 1024
+
+func DefaultHTTPClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout: 30 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   15 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+		},
+	}
+}
+
 func DoHTTP(client *http.Client, req *http.Request, label string) ([]byte, error) {
 	resp, err := client.Do(req)
 	if err != nil {
@@ -135,15 +176,22 @@ func DoHTTP(client *http.Client, req *http.Request, label string) ([]byte, error
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil, &pipeline.PipelineError{
 			StatusCode: resp.StatusCode,
 			Message:    fmt.Sprintf("%s upstream error: %s", label, string(body)),
 		}
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read %s response: %w", label, err)
+	}
+	if len(body) > maxResponseBodyBytes {
+		return nil, &pipeline.PipelineError{
+			StatusCode: http.StatusBadGateway,
+			Message:    fmt.Sprintf("%s response too large", label),
+		}
 	}
 	return body, nil
 }
@@ -156,6 +204,7 @@ func DoHTTPStream(client *http.Client, req *http.Request, label string) (*http.R
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 		return nil, &pipeline.PipelineError{
 			StatusCode: resp.StatusCode,

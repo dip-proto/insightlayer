@@ -10,6 +10,8 @@ import (
 	"github.com/j/insightlayer/internal/stream"
 )
 
+const maxRequestBodyBytes = 10 * 1024 * 1024
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestID := NormalizeRequestID(r.Header)
 	ctx := observability.WithRequestID(r.Context(), requestID)
@@ -17,11 +19,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Request-Id", requestID)
 	setTraceHeaders(w, r.Header)
 
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodyBytes+1))
 	if err != nil {
 		resp := h.BuildErrorResponse(ctx, &pipeline.PipelineError{
 			StatusCode: http.StatusBadRequest,
 			Message:    "failed to read request body",
+		})
+		writeOutboundResponse(w, resp)
+		return
+	}
+	if len(body) > maxRequestBodyBytes {
+		_, _ = io.Copy(io.Discard, r.Body)
+		resp := h.BuildErrorResponse(ctx, &pipeline.PipelineError{
+			StatusCode: http.StatusRequestEntityTooLarge,
+			Message:    "request body too large",
 		})
 		writeOutboundResponse(w, resp)
 		return

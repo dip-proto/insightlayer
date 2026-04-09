@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -123,12 +124,12 @@ backends:
       value: ${UNSET_VAR_12345}
 `)
 
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unresolved environment variable, got nil")
 	}
-	if cfg.Backends[0].Auth.Value != "${UNSET_VAR_12345}" {
-		t.Errorf("unset var should be preserved, got %q", cfg.Backends[0].Auth.Value)
+	if !strings.Contains(err.Error(), "UNSET_VAR_12345") {
+		t.Errorf("error should mention the unresolved variable, got: %v", err)
 	}
 }
 
@@ -250,6 +251,7 @@ backends:
 routing:
   routes:
     - name: r
+      inbound_protocol: openai
       path_prefix: /v1/
       endpoint_kinds: [chat]
       backend: b

@@ -315,7 +315,11 @@ func EncodeRequest(req *pipeline.NormalizedRequest) ([]byte, error) {
 	}
 
 	if req.ToolChoice != nil {
-		out.ToolChoice = encodeAnthropicToolChoice(req.ToolChoice)
+		tc, err := encodeAnthropicToolChoice(req.ToolChoice)
+		if err != nil {
+			return nil, err
+		}
+		out.ToolChoice = tc
 	}
 
 	return json.Marshal(out)
@@ -410,17 +414,20 @@ func decodeAnthropicToolChoice(raw json.RawMessage) *pipeline.ToolChoice {
 	return nil
 }
 
-func encodeAnthropicToolChoice(tc *pipeline.ToolChoice) json.RawMessage {
+func encodeAnthropicToolChoice(tc *pipeline.ToolChoice) (json.RawMessage, error) {
 	switch tc.Mode {
 	case "auto":
-		return json.RawMessage(`{"type":"auto"}`)
+		return json.RawMessage(`{"type":"auto"}`), nil
 	case "none":
-		return json.RawMessage(`{"type":"auto"}`)
+		return nil, &pipeline.PipelineError{
+			StatusCode: 400,
+			Message:    `tool_choice "none" cannot be translated to Anthropic: the Anthropic API has no equivalent for disabling tool use entirely`,
+		}
 	case "required":
-		return json.RawMessage(`{"type":"any"}`)
+		return json.RawMessage(`{"type":"any"}`), nil
 	case "specific":
-		data, _ := json.Marshal(map[string]string{"type": "tool", "name": tc.Name})
-		return data
+		data, err := json.Marshal(map[string]string{"type": "tool", "name": tc.Name})
+		return data, err
 	}
-	return nil
+	return nil, nil
 }

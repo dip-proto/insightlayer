@@ -25,7 +25,7 @@ type Backend struct {
 
 func New(cfg config.BackendConfig, client *http.Client) *Backend {
 	if client == nil {
-		client = http.DefaultClient
+		client = backend.DefaultHTTPClient()
 	}
 	return &Backend{
 		name:    cfg.Name,

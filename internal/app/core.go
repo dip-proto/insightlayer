@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,8 @@ import (
 	"github.com/j/insightlayer/internal/pipeline"
 	"github.com/j/insightlayer/internal/router"
 )
+
+const maxResponseBodyBytes = 50 * 1024 * 1024
 
 type InboundRequest struct {
 	RequestID string
@@ -56,6 +59,10 @@ func (h *Handler) Handle(ctx context.Context, req *InboundRequest) *HandleResult
 		return errorResult(ctx, h, err)
 	}
 
+	if err := validateMethod(req.Method, resolved.EndpointKind); err != nil {
+		return errorResult(ctx, h, err)
+	}
+
 	be, err := h.backends.Get(resolved.Route.BackendName)
 	if err != nil {
 		return errorResult(ctx, h, err)
@@ -78,7 +85,7 @@ func (h *Handler) Handle(ctx context.Context, req *InboundRequest) *HandleResult
 	}
 
 	nReq.ID = req.RequestID
-	nReq.Headers = http.Header(req.Headers)
+	nReq.Headers = backend.SanitizeClientHeaders(http.Header(req.Headers))
 
 	if !be.Supports(nReq.EndpointKind) {
 		return errorResult(ctx, h, &pipeline.PipelineError{
@@ -163,7 +170,7 @@ func (h *Handler) handlePassthroughCore(ctx context.Context, req *InboundRequest
 		ID:             req.RequestID,
 		ClientProtocol: resolved.Route.InboundProtocol,
 		EndpointKind:   resolved.EndpointKind,
-		Headers:        http.Header(req.Headers),
+		Headers:        backend.SanitizeClientHeaders(http.Header(req.Headers)),
 		Model:          extractModelFromBody(req.Body),
 	}
 
@@ -181,6 +188,7 @@ func (h *Handler) handlePassthroughCore(ctx context.Context, req *InboundRequest
 
 	if upstreamResp.StatusCode >= 400 {
 		errBody, _ := io.ReadAll(io.LimitReader(upstreamResp.Body, 4096))
+		_, _ = io.Copy(io.Discard, upstreamResp.Body)
 		errHeaders := upstreamResp.Header.Clone()
 		errHeaders.Del("Content-Length")
 		errHeaders.Del("Content-Encoding")
@@ -193,12 +201,18 @@ func (h *Handler) handlePassthroughCore(ctx context.Context, req *InboundRequest
 		}
 	}
 
-	respBody, err := io.ReadAll(upstreamResp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(upstreamResp.Body, maxResponseBodyBytes+1))
 	if err != nil {
 		return nil, &pipeline.PipelineError{
 			StatusCode: http.StatusBadGateway,
 			Message:    "failed to read upstream response",
 			Cause:      err,
+		}
+	}
+	if len(respBody) > maxResponseBodyBytes {
+		return nil, &pipeline.PipelineError{
+			StatusCode: http.StatusBadGateway,
+			Message:    "upstream response too large",
 		}
 	}
 
@@ -218,6 +232,20 @@ func (h *Handler) handlePassthroughCore(ctx context.Context, req *InboundRequest
 	return out, nil
 }
 
+func validateMethod(method string, kind pipeline.EndpointKind) error {
+	allowed := http.MethodPost
+	if kind == pipeline.EndpointModelList {
+		allowed = http.MethodGet
+	}
+	if method != allowed {
+		return &pipeline.PipelineError{
+			StatusCode: http.StatusMethodNotAllowed,
+			Message:    fmt.Sprintf("method %s not allowed; use %s", method, allowed),
+		}
+	}
+	return nil
+}
+
 func errorResult(ctx context.Context, h *Handler, err error) *HandleResult {
 	return &HandleResult{Response: h.BuildErrorResponse(ctx, err)}
 }
@@ -226,8 +254,8 @@ func errorResult(ctx context.Context, h *Handler, err error) *HandleResult {
 // logs the result. Transport adapters use this for mid-stream errors where
 // the response headers have already been sent.
 func (h *Handler) HandleError(ctx context.Context, err error) *pipeline.PipelineError {
-	pErr, ok := err.(*pipeline.PipelineError)
-	if !ok {
+	var pErr *pipeline.PipelineError
+	if !errors.As(err, &pErr) {
 		pErr = &pipeline.PipelineError{
 			StatusCode: http.StatusInternalServerError,
 			Message:    err.Error(),
