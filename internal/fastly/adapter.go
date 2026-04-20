@@ -69,12 +69,10 @@ func (a *Adapter) handleHealth(w fsthttp.ResponseWriter, r *fsthttp.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if r.Method == "HEAD" {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"ok"}`))
+	if r.Method != "HEAD" {
+		w.Write([]byte(`{"status":"ok"}`))
+	}
 }
 
 func setTraceHeaders(w fsthttp.ResponseWriter, headers map[string][]string) {
