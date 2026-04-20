@@ -189,6 +189,11 @@ func (h *Handler) handlePassthroughCore(ctx context.Context, req *InboundRequest
 	if upstreamResp.StatusCode >= 400 {
 		errBody, _ := io.ReadAll(io.LimitReader(upstreamResp.Body, 4096))
 		_, _ = io.Copy(io.Discard, upstreamResp.Body)
+		observability.LoggerFrom(ctx, h.logger).Error(
+			"upstream passthrough request failed",
+			"status", upstreamResp.StatusCode,
+			"body", string(errBody),
+		)
 		errHeaders := upstreamResp.Header.Clone()
 		errHeaders.Del("Content-Length")
 		errHeaders.Del("Content-Encoding")
@@ -196,7 +201,7 @@ func (h *Handler) handlePassthroughCore(ctx context.Context, req *InboundRequest
 		errHeaders.Del("Transfer-Encoding")
 		return nil, &pipeline.PipelineError{
 			StatusCode: upstreamResp.StatusCode,
-			Message:    string(errBody),
+			Message:    "upstream request failed",
 			Headers:    errHeaders,
 		}
 	}

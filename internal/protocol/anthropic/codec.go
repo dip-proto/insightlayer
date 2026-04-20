@@ -71,6 +71,17 @@ func marshalBlocksContent(blocks []ContentBlock) json.RawMessage {
 	return data
 }
 
+func validatedToolArguments(args string) (json.RawMessage, error) {
+	raw := json.RawMessage(args)
+	if !json.Valid(raw) {
+		return nil, &pipeline.PipelineError{
+			StatusCode: 400,
+			Message:    "tool call arguments must be valid JSON",
+		}
+	}
+	return raw, nil
+}
+
 func parseMessageContent(raw json.RawMessage) (string, []ContentBlock) {
 	if len(raw) == 0 {
 		return "", nil
@@ -144,13 +155,11 @@ func DecodeRequest(data []byte) (*pipeline.NormalizedRequest, error) {
 
 		if m.Role == "user" {
 			var textParts []string
-			var hasToolResult bool
 			for _, block := range blocks {
 				switch block.Type {
 				case "text":
 					textParts = append(textParts, block.Text)
 				case "tool_result":
-					hasToolResult = true
 					msgs = append(msgs, pipeline.Message{
 						Role:       "tool",
 						Content:    block.ResultContent,
@@ -158,7 +167,7 @@ func DecodeRequest(data []byte) (*pipeline.NormalizedRequest, error) {
 					})
 				}
 			}
-			if len(textParts) > 0 && !hasToolResult {
+			if len(textParts) > 0 {
 				msgs = append(msgs, pipeline.Message{Role: "user", Content: strings.Join(textParts, "")})
 			}
 			continue
@@ -190,7 +199,11 @@ func DecodeRequest(data []byte) (*pipeline.NormalizedRequest, error) {
 	}
 
 	if len(raw.ToolChoice) > 0 {
-		req.ToolChoice = decodeAnthropicToolChoice(raw.ToolChoice)
+		toolChoice, err := decodeAnthropicToolChoice(raw.ToolChoice)
+		if err != nil {
+			return nil, fmt.Errorf("decode anthropic tool_choice: %w", err)
+		}
+		req.ToolChoice = toolChoice
 	}
 
 	return req, nil
@@ -207,11 +220,15 @@ func EncodeResponse(resp *pipeline.NormalizedResponse) ([]byte, error) {
 		blocks = append(blocks, ContentBlock{Type: "text", Text: resp.Content})
 	}
 	for _, tc := range resp.ToolCalls {
+		input, err := validatedToolArguments(tc.Arguments)
+		if err != nil {
+			return nil, err
+		}
 		blocks = append(blocks, ContentBlock{
 			Type:  "tool_use",
 			ID:    tc.ID,
 			Name:  tc.Name,
-			Input: json.RawMessage(tc.Arguments),
+			Input: input,
 		})
 	}
 	if len(blocks) == 0 {
@@ -263,11 +280,15 @@ func EncodeRequest(req *pipeline.NormalizedRequest) ([]byte, error) {
 				blocks = append(blocks, ContentBlock{Type: "text", Text: m.Content})
 			}
 			for _, tc := range m.ToolCalls {
+				input, err := validatedToolArguments(tc.Arguments)
+				if err != nil {
+					return nil, err
+				}
 				blocks = append(blocks, ContentBlock{
 					Type:  "tool_use",
 					ID:    tc.ID,
 					Name:  tc.Name,
-					Input: json.RawMessage(tc.Arguments),
+					Input: input,
 				})
 			}
 			msgs = append(msgs, Message{
@@ -395,23 +416,23 @@ func MapStopReason(reason string) string {
 	}
 }
 
-func decodeAnthropicToolChoice(raw json.RawMessage) *pipeline.ToolChoice {
+func decodeAnthropicToolChoice(raw json.RawMessage) (*pipeline.ToolChoice, error) {
 	var obj struct {
 		Type string `json:"type"`
 		Name string `json:"name,omitempty"`
 	}
-	if json.Unmarshal(raw, &obj) != nil {
-		return nil
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, err
 	}
 	switch obj.Type {
 	case "auto":
-		return &pipeline.ToolChoice{Mode: "auto"}
+		return &pipeline.ToolChoice{Mode: "auto"}, nil
 	case "any":
-		return &pipeline.ToolChoice{Mode: "required"}
+		return &pipeline.ToolChoice{Mode: "required"}, nil
 	case "tool":
-		return &pipeline.ToolChoice{Mode: "specific", Name: obj.Name}
+		return &pipeline.ToolChoice{Mode: "specific", Name: obj.Name}, nil
 	}
-	return nil
+	return nil, nil
 }
 
 func encodeAnthropicToolChoice(tc *pipeline.ToolChoice) (json.RawMessage, error) {

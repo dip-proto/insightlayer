@@ -18,7 +18,9 @@ type SSEReader struct {
 }
 
 func NewSSEReader(r io.Reader) *SSEReader {
-	return &SSEReader{scanner: bufio.NewScanner(r)}
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	return &SSEReader{scanner: scanner}
 }
 
 func (r *SSEReader) Next() (*SSEEvent, error) {
